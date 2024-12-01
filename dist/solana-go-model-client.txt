@@ -1,0 +1,52 @@
+/*
+ * SolanaGo - Decentralized Go AI on Solana Blockchain
+ * Copyright (C) 2024 Your Organization. All rights reserved.
+ */
+#pragma once
+
+#include <memory>
+#include <vector>
+#include <string>
+
+#include "model/base_model.h"
+#include "network/rate_limiter.h"
+#include "config/network_config.h"
+#include "solana/program_interface.h"
+
+class SolanaModelClient final : public BaseModel 
+{
+public:
+    SolanaModelClient(const std::string &rpc_url, const NetworkConfig &config);
+
+    // Initialize model with given configuration
+    int Init(const ModelConfig &model_config) override;
+
+    // Run model inference
+    int Forward(const std::vector<std::vector<bool>>& board_state,
+               std::vector<std::vector<float>> &policy, 
+               std::vector<float> &value) override;
+
+    // Get current model version from chain
+    int GetModelVersion(int &version) override;
+
+    // Wait for rate limiter
+    void Wait() override;
+
+private:
+    // Submit transaction to chain
+    int SubmitTransaction(const Transaction &tx);
+
+    // Verify transaction
+    int VerifyTransaction(const std::string &signature);
+
+private:
+    NetworkConfig m_config;
+    std::string m_rpc_url;
+    std::unique_ptr<ProgramInterface> m_program;
+    RateLimiter m_rate_limiter;
+    
+    // Statistics
+    uint64_t m_total_transactions;
+    uint64_t m_successful_transactions;
+    std::chrono::microseconds m_avg_latency;
+};

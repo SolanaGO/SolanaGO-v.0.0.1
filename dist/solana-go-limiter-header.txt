@@ -1,0 +1,150 @@
+/*
+ * SolanaGo - Decentralized Go AI on Solana Blockchain
+ * Copyright (C) 2024 Your Organization. All rights reserved.
+ */
+#pragma once
+
+#include <chrono>
+#include <memory>
+#include <vector>
+
+// Forward declarations
+namespace solana {
+    class Transaction;
+    class Account;
+}
+
+/*
+ * Rate limiter interface for managing transaction and computation throughput
+ * on the Solana blockchain. Implements token bucket algorithm with support for:
+ * - Transaction rate limiting
+ * - Compute unit budgeting
+ * - Priority-based throttling 
+ */
+class RateLimiterInterface {
+public:
+    virtual ~RateLimiterInterface() = default;
+    
+    // Check if operation can proceed under rate limits
+    virtual bool CanProceed() = 0;
+    
+    // Wait until operation is allowed to proceed
+    virtual void WaitForCapacity() = 0;
+    
+    // Get current capacity metrics
+    virtual void GetMetrics(RateLimitMetrics& metrics) = 0;
+};
+
+/*
+ * Metrics for monitoring rate limiting behavior
+ */
+struct RateLimitMetrics {
+    uint64_t total_requests;        // Total requests received
+    uint64_t throttled_requests;    // Requests that were throttled
+    uint64_t current_capacity;      // Current available capacity
+    std::chrono::microseconds avg_wait_time; // Average wait time
+};
+
+/*
+ * Configuration for rate limiter
+ */
+struct RateLimitConfig {
+    uint32_t max_transactions_per_second;  // Max TPS
+    uint32_t max_compute_units_per_second; // Max CU/s
+    uint32_t burst_factor;                 // Allowed burst multiplier
+    std::chrono::milliseconds min_retry_delay; // Minimum retry delay
+    std::chrono::milliseconds max_retry_delay; // Maximum retry delay
+};
+
+/*
+ * Base rate limiter implementation for Solana transactions
+ */
+class TransactionRateLimiter : public RateLimiterInterface {
+public:
+    explicit TransactionRateLimiter(RateLimitConfig config);
+    ~TransactionRateLimiter() override = default;
+
+    bool CanProceed() override;
+    void WaitForCapacity() override;
+    void GetMetrics(RateLimitMetrics& metrics) override;
+
+    // Transaction-specific methods
+    bool CheckTransaction(const solana::Transaction& tx);
+    void RecordTransaction(const solana::Transaction& tx);
+
+protected:
+    // Internal token bucket state
+    struct TokenBucket {
+        double tokens;
+        std::chrono::steady_clock::time_point last_update;
+        const double capacity;
+        const double rate;
+
+        TokenBucket(double cap, double fill_rate)
+            : tokens(cap), capacity(cap), rate(fill_rate) {}
+    };
+
+    void RefillTokens();
+    bool ConsumeTokens(double amount);
+
+private:
+    RateLimitConfig m_config;
+    TokenBucket m_tx_bucket;
+    TokenBucket m_cu_bucket;
+    RateLimitMetrics m_metrics;
+    mutable std::mutex m_mutex;
+};
+
+/*
+ * Priority-aware rate limiter for handling different transaction priorities
+ */
+class PriorityRateLimiter : public TransactionRateLimiter {
+public:
+    explicit PriorityRateLimiter(RateLimitConfig config);
+
+    struct PriorityLevel {
+        double quota;           // Portion of total capacity
+        double min_guaranteed;  // Minimum guaranteed throughput
+        uint32_t max_wait_ms;  // Maximum wait time
+    };
+
+    bool CheckPriority(uint32_t priority_level);
+    void SetPriorityConfig(uint32_t level, PriorityLevel config);
+
+private:
+    std::vector<PriorityLevel> m_priority_levels;
+    std::vector<TokenBucket> m_priority_buckets;
+};
+
+/*
+ * Distributed rate limiter for coordinating across multiple validators
+ */
+class DistributedRateLimiter : public RateLimiterInterface {
+public:
+    DistributedRateLimiter(
+        RateLimitConfig config,
+        std::vector<std::string> validator_addresses
+    );
+
+    bool CanProceed() override;
+    void WaitForCapacity() override;
+    void GetMetrics(RateLimitMetrics& metrics) override;
+
+    // Validator coordination
+    void SyncWithValidators();
+    void UpdateValidatorSet(std::vector<std::string> new_validators);
+
+private:
+    struct ValidatorState {
+        std::string address;
+        uint32_t current_tps;
+        uint32_t current_cu_usage;
+        std::chrono::system_clock::time_point last_update;
+    };
+
+    RateLimitConfig m_config;
+    std::vector<ValidatorState> m_validators;
+    std::unique_ptr<TransactionRateLimiter> m_local_limiter;
+    mutable std::mutex m_mutex;
+};
+

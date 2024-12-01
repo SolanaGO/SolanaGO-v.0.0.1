@@ -1,0 +1,95 @@
+[package]
+name = "solana-go"
+version = "0.1.0"
+edition = "2021"
+description = "Decentralized Go AI on Solana Blockchain"
+authors = ["Your Organization"]
+license = "Apache-2.0"
+
+[dependencies]
+solana-sdk = "1.14"
+solana-client = "1.14"
+solana-program = "1.14"
+anchor-lang = "0.27.0"
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.9"
+rand = "0.8"
+bytemuck = { version = "1.13", features = ["derive"] }
+cuda-runtime-sys = { version = "0.3", optional = true }
+tensorrt = { version = "0.3", optional = true }
+wasmer = { version = "3.1", optional = true }
+
+[features]
+default = ["gpu"]
+gpu = ["cuda-runtime-sys", "tensorrt"]
+cpu = []
+simulator = []
+mainnet = []
+
+[lib]
+name = "solana_go"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "solana-go-cli"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "model-server"
+path = "src/bin/model_server.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[workspace]
+members = [
+    "programs/*",
+    "clients/*",
+    "tests",
+]
+
+[build-dependencies]
+cmake = "0.1"
+bindgen = "0.63"
+
+[dev-dependencies]
+criterion = "0.4"
+proptest = "1.0"
+solana-validator = "1.14"
+solana-test-validator = "1.14"
+
+[[bench]]
+name = "model_inference"
+harness = false
+
+[package.metadata.docs.rs]
+features = ["gpu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.solana]
+name = "solana_go"
+version = "0.1.0"
+description = "Decentralized Go AI Program"
+license = "Apache-2.0"
+repository = "https://github.com/your-org/solana-go"
+authority = "Update authority public key"
+test-validator = { rpc-port = 8899, commitment = "confirmed" }
+
+[scripts]
+build-program = "cargo build-bpf --manifest-path=programs/go_ai/Cargo.toml"
+deploy-program = "solana program deploy target/deploy/go_ai.so"
+test-program = "cargo test-bpf --manifest-path=programs/go_ai/Cargo.toml"
+start-validator = "solana-test-validator --reset --quiet"

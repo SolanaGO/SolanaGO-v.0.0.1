@@ -1,0 +1,167 @@
+/*
+ * SolanaGo - Decentralized Go AI on Solana Blockchain
+ * Copyright (C) 2024 Your Organization. All rights reserved.
+ */
+#include <glog/logging.h>
+#include <grpc++/grpc++.h>
+
+#include "common/timer.h"
+#include "model/neural_network.h"
+#include "model/accelerated_model.h"
+#include "solana/validator_interface.h"
+
+DEFINE_string(rpc_url, "", "Solana RPC URL");
+DEFINE_int32(gpu_id, 0, "GPU device ID");
+DEFINE_string(program_id, "", "Solana program ID");
+
+class SolanaModelService final : public ModelService {
+public:
+    grpc::Status Initialize(grpc::ServerContext *context, 
+                          const InitRequest *req, 
+                          InitResponse *resp) override 
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        LOG(INFO) << "Initializing with config: " << req->model_config().DebugString();
+
+        try {
+            // Initialize Solana validator interface
+            m_validator = std::make_unique<ValidatorInterface>(
+                FLAGS_rpc_url,
+                FLAGS_program_id
+            );
+
+            // Initialize neural network
+            m_model = std::make_unique<NeuralNetwork>(FLAGS_gpu_id);
+            if (req->model_config().enable_acceleration()) {
+                m_model = std::make_unique<AcceleratedModel>(FLAGS_gpu_id);
+            }
+
+            int ret = m_model->Init(req->model_config());
+            if (ret == 0) {
+                LOG(INFO) << "Model initialization successful";
+                return grpc::Status::OK;
+            } else {
+                LOG(ERROR) << "Model initialization failed: " << ret;
+                return grpc::Status(grpc::StatusCode(ret), "Model initialization failed");
+            }
+        } catch (const std::exception& e) {
+            LOG(ERROR) << "Initialization error: " << e.what();
+            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+        }
+    }
+
+    grpc::Status GetModelVersion(grpc::ServerContext *context,
+                               const VersionRequest *req, 
+                               VersionResponse *resp) override 
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_model || !m_validator) {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, 
+                              "Service not initialized");
+        }
+
+        try {
+            // Get version from chain
+            int version;
+            int ret = m_validator->GetModelVersion(version);
+
+            if (ret == 0) {
+                LOG(INFO) << "Current model version: " << version;
+                resp->set_version(version);
+                return grpc::Status::OK;
+            } else {
+                LOG(ERROR) << "Failed to get model version: " << ret;
+                return grpc::Status(grpc::StatusCode(ret), "Version check failed");
+            }
+        } catch (const std::exception& e) {
+            LOG(ERROR) << "Version check error: " << e.what();
+            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+        }
+    }
+
+    grpc::Status Predict(grpc::ServerContext *context, 
+                        const PredictRequest *req,
+                        PredictResponse *resp) override 
+    {
+        Timer timer;
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_model || !m_validator) {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, 
+                              "Service not initialized");
+        }
+
+        try {
+            // Parse input board state
+            std::vector<std::vector<bool>> board_state;
+            for (const auto &encoded_state: req->board_states()) {
+                if (encoded_state.size() * 8 < m_model->INPUT_DIM) {
+                    LOG(ERROR) << "Invalid input dimension";
+                    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, 
+                                     "Invalid board state");
+                }
+                std::vector<bool> state(m_model->INPUT_DIM);
+                for (int i = 0; i < m_model->INPUT_DIM; ++i) {
+                    state[i] = (unsigned char)encoded_state[i / 8] >> (i % 8) & 1;
+                }
+                board_state.push_back(std::move(state));
+            }
+
+            // Run model inference
+            std::vector<std::vector<float>> policy;
+            std::vector<float> value;
+            int ret = m_model->Forward(board_state, policy, value);
+
+            if (ret == 0) {
+                // Record prediction on chain
+                ret = m_validator->RecordPrediction(board_state, policy, value);
+                if (ret != 0) {
+                    LOG(WARNING) << "Failed to record prediction on chain: " << ret;
+                }
+
+                // Build response
+                for (size_t i = 0; i < policy.size(); ++i) {
+                    auto *output = resp->add_outputs();
+                    for (const auto &p: policy[i]) {
+                        output->add_policy(p);
+                    }
+                    output->set_value(value[i]);
+                }
+
+                LOG_EVERY_N(INFO, 1000) << "Prediction successful, latency: " 
+                                      << timer.duration_ms() << "ms";
+                return grpc::Status::OK;
+            } else {
+                LOG(ERROR) << "Prediction failed: " << ret;
+                return grpc::Status(grpc::StatusCode(ret), "Prediction failed");
+            }
+        } catch (const std::exception& e) {
+            LOG(ERROR) << "Prediction error: " << e.what();
+            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+        }
+    }
+
+private:
+    std::mutex m_mutex;
+    std::unique_ptr<ModelBase> m_model;
+    std::unique_ptr<ValidatorInterface> m_validator;
+};
+
+int main(int argc, char *argv[]) 
+{
+    google::ParseCommandLineFlags(&argc, &argv, true);
+    google::InitGoogleLogging(argv[0]);
+    google::InstallFailureSignalHandler();
+
+    SolanaModelService service;
+
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort(FLAGS_rpc_url, grpc::InsecureServerCredentials());
+    builder.RegisterService(&service);
+    
+    std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
+    LOG(INFO) << "Server listening on " << FLAGS_rpc_url;
+    server->Wait();
+
+    return 0;
+}

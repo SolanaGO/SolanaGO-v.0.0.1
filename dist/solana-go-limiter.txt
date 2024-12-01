@@ -1,0 +1,162 @@
+/*
+ * SolanaGo - Decentralized Go AI on Solana Blockchain
+ * Copyright (C) 2024 Your Organization. All rights reserved.
+ */
+#pragma once
+
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
+
+class RateLimiter {
+public:
+    // Initialize with capacity and refill rate
+    RateLimiter(int capacity, int refill_period_ms)
+        : m_capacity(capacity)
+        , m_tokens(capacity)
+        , m_refill_period(std::chrono::milliseconds(refill_period_ms))
+        , m_last_refill(Clock::now())
+        , m_total_requests(0)
+        , m_throttled_requests(0)
+    {
+    }
+
+    // Consume a token, returns false if would exceed rate limit
+    bool ConsumeToken() 
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_total_requests++;
+        
+        RefillTokens();
+        
+        if (m_tokens <= 0) {
+            m_throttled_requests++;
+            return false;
+        }
+        
+        m_tokens--;
+        return true;
+    }
+
+    // Check if bucket is empty
+    bool IsEmpty() const 
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_tokens <= 0;
+    }
+
+    // Wait until tokens are available
+    void WaitForTokens()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        while (m_tokens <= 0) {
+            auto next_refill = m_last_refill + m_refill_period;
+            m_cv.wait_until(lock, next_refill);
+            RefillTokens();
+        }
+        m_tokens--;
+    }
+
+    // Get rate limiting statistics
+    void GetStats(uint64_t& total, uint64_t& throttled) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        total = m_total_requests;
+        throttled = m_throttled_requests;
+    }
+
+private:
+    void RefillTokens()
+    {
+        auto now = Clock::now();
+        auto elapsed = now - m_last_refill;
+        
+        if (elapsed >= m_refill_period) {
+            m_tokens = m_capacity;
+            m_last_refill = now;
+            m_cv.notify_all();
+        }
+    }
+
+private:
+    using Clock = std::chrono::system_clock;
+    
+    const int m_capacity;
+    int m_tokens;
+    const Clock::duration m_refill_period;
+    Clock::time_point m_last_refill;
+
+    mutable std::mutex m_mutex;
+    std::condition_variable m_cv;
+
+    // Statistics
+    uint64_t m_total_requests;
+    uint64_t m_throttled_requests;
+};
+
+// Enhanced rate limiter with transaction prioritization
+class PrioritizedRateLimiter : public RateLimiter {
+public:
+    PrioritizedRateLimiter(int capacity, int refill_period_ms)
+        : RateLimiter(capacity, refill_period_ms)
+        , m_high_priority_quota(capacity * 0.2) // 20% reserved for high priority
+    {
+    }
+
+    bool ConsumeToken(bool high_priority) 
+    {
+        if (high_priority) {
+            return ConsumeHighPriorityToken();
+        }
+        return RateLimiter::ConsumeToken();
+    }
+
+private:
+    bool ConsumeHighPriorityToken() 
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        
+        if (m_high_priority_tokens <= 0) {
+            return RateLimiter::ConsumeToken();
+        }
+        
+        m_high_priority_tokens--;
+        return true;
+    }
+
+private:
+    const int m_high_priority_quota;
+    int m_high_priority_tokens{m_high_priority_quota};
+    std::mutex m_mutex;
+};
+
+// Distributed rate limiter for cross-validator coordination
+class DistributedRateLimiter {
+public:
+    DistributedRateLimiter(std::vector<RateLimiter*> limiters)
+        : m_limiters(std::move(limiters))
+    {
+    }
+
+    bool ConsumeToken() 
+    {
+        // Try each limiter in round-robin fashion
+        for (auto* limiter : m_limiters) {
+            if (limiter->ConsumeToken()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void WaitForAvailability() 
+    {
+        // Wait for any limiter to become available
+        while (!ConsumeToken()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+private:
+    std::vector<RateLimiter*> m_limiters;
+};
