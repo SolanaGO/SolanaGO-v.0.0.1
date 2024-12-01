@@ -6,12 +6,10 @@ SolanaGo represents a new paradigm in decentralized AI gaming, where:
 
 
 
-<<<<<<< HEAD
-    ![SolanaGO](https: //github.com/user-attachments/assets/40bd7545-9fea-4300-9915-38344359ce70)
-=======
+
    
 ![SolanaGO](https://github.com/user-attachments/assets/c3293220-270f-48a6-9854-80cdcc8ffcec)
->>>>>>> d23ef5ed26f1880e9fca95572b18b544e7099c4e
+
 
         Game states are recorded on Solana blockchain AI computations are distributed and verifiable Players can earn rewards through participation The system is governed by DAO
 
