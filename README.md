@@ -12,7 +12,7 @@ Copy@misc{SolanaGo2024,
   title = {SolanaGo},
   year = {2024},
   journal = {GitHub repository},
-  howpublished = {\url{https://github.com/YourOrg/SolanaGo}}
+  howpublished = {{https://github.com/SolanaGO/SolanaGO-v.0.0.1}}
 }
 Building and Running
 On Linux
