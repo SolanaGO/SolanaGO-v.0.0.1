@@ -2,6 +2,8 @@ SolanaGo is a decentralized Go AI program implemented on Solana blockchain, whic
     "Mastering the game of Go without human knowledge"
 into Web3 infrastructure.It pioneers the integration of blockchain technology with artificial intelligence in the domain of
     Go / Weiqi game.
+
+X:https://x.com/SolPornAI
 SolanaGo represents a new paradigm in decentralized AI gaming, where:
 
 
